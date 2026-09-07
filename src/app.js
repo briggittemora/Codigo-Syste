@@ -152,7 +152,9 @@ app.use('/api', ensureUserRouter);
 app.use(seoRouter);
 
 if (distPath) {
-  app.use(express.static(distPath));
+  // Serve assets normally, but let the SPA fallback handle index.html so the
+  // public Supabase configuration is injected on every entry route, including `/`.
+  app.use(express.static(distPath, { index: false }));
 
   // SPA fallback: serve index.html for non-API routes.
   app.get(/^\/(?!api\/).*/, (req, res) => {
