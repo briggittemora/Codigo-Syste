@@ -1,0 +1,192 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+
+const filesRouter = require('./routes/files');
+const uploadRouter = require('./routes/upload');
+const archivosRouter = require('./routes/archivos');
+const seoRouter = require('./routes/seo');
+const membershipRouter = require('./routes/membership');
+const meRouter = require('./routes/me');
+const purchasesRouter = require('./routes/purchases');
+const guestPurchasesRouter = require('./routes/guestPurchases');
+const paypalRouter = require('./routes/paypal');
+const profileRouter = require('./routes/profile');
+const configRouter = require('./routes/config');
+const ensureUserRouter = require('./routes/ensureUser');
+
+const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+const BODY_LIMIT = process.env.BODY_LIMIT || '10mb';
+
+app.use(express.json({ limit: BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT, parameterLimit: 1000 }));
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  next();
+});
+
+// Simple request logger to help debug missing routes
+app.use((req, res, next) => {
+  try {
+    console.log(`[req] ${new Date().toISOString()} ${req.method} ${req.originalUrl}`);
+  } catch (e) {}
+  next();
+});
+
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const CLIENT_URL_DEV = process.env.CLIENT_URL_DEV || 'http://localhost:3000';
+const CLIENT_URL_PROD = process.env.CLIENT_URL_PROD || null;
+
+// Build allowed origins from env; include localhost dev hosts by default.
+const allowedOrigins = [CLIENT_URL_PROD, CLIENT_URL_DEV, 'http://localhost:5173', 'http://127.0.0.1:5173']
+  .filter(Boolean);
+
+// Security middleware
+app.use(helmet({
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: false,
+}));
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow non-browser requests like curl/postman (no origin)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true);
+      return callback(null, false);
+    },
+    credentials: true,
+  })
+);
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: Number(process.env.RATE_LIMIT_MAX || 120),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many requests',
+    code: 'TOO_MANY_REQUESTS',
+  },
+});
+
+const getPublicSupabaseConfig = () => {
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.SUPABASE_DB_URL || process.env.VITE_SUPABASE_URL || '';
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLIC_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+  return {
+    supabaseUrl: String(supabaseUrl || '').trim() || null,
+    supabaseAnonKey: String(supabaseAnonKey || '').trim() || null,
+  };
+};
+
+const injectPublicConfig = (html) => {
+  const config = getPublicSupabaseConfig();
+  const payload = JSON.stringify({ supabaseUrl: config.supabaseUrl, supabaseAnonKey: config.supabaseAnonKey });
+  const script = `<script>window.__APP_PUBLIC_CONFIG__=${payload};</script>`;
+  if (html.includes('</head>')) {
+    return html.replace('</head>', `${script}</head>`);
+  }
+  return `${script}${html}`;
+};
+
+// Apply rate limiting only to mutating API requests so normal read-heavy page loads are not blocked.
+app.use('/api', (req, res, next) => {
+  const method = String(req.method || '').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+  return limiter(req, res, next);
+});
+
+// Serve built frontend (Vite) when available.
+// Prefer backend/dist, then dist/ at repo root, then frontend/dist.
+const backendDistPath = path.resolve(__dirname, '..', 'dist');
+const rootDistPath = path.resolve(__dirname, '..', '..', 'dist');
+const frontendDistPath = path.resolve(__dirname, '..', '..', 'frontend', 'dist');
+
+const backendDistExists = fs.existsSync(backendDistPath);
+const rootDistExists = fs.existsSync(rootDistPath);
+const frontendDistExists = fs.existsSync(frontendDistPath);
+
+const distPath = backendDistExists
+  ? backendDistPath
+  : (rootDistExists
+    ? rootDistPath
+    : (frontendDistExists ? frontendDistPath : null));
+
+// Debug logs to verify which dist path is used (useful in Render).
+console.log('[static] NODE_ENV:', NODE_ENV);
+console.log('[static] cwd:', process.cwd());
+console.log('[static] __dirname:', __dirname);
+console.log('[static] backend/dist:', backendDistPath, 'exists=', backendDistExists);
+console.log('[static] backend/dist/index.html exists=', fs.existsSync(path.join(backendDistPath, 'index.html')));
+console.log('[static] root dist:', rootDistPath, 'exists=', rootDistExists);
+console.log('[static] root dist/index.html exists=', fs.existsSync(path.join(rootDistPath, 'index.html')));
+console.log('[static] frontend/dist:', frontendDistPath, 'exists=', frontendDistExists);
+console.log('[static] frontend/dist/index.html exists=', fs.existsSync(path.join(frontendDistPath, 'index.html')));
+console.log('[static] serving distPath:', distPath || '(none)');
+
+// mount routers
+app.use('/api', filesRouter);
+app.use('/api', uploadRouter);
+app.use('/api', membershipRouter);
+app.use('/api', meRouter);
+app.use('/api', purchasesRouter);
+app.use('/api', guestPurchasesRouter);
+app.use('/api', paypalRouter);
+app.use('/api/profile', profileRouter);
+app.use('/api', configRouter);
+app.use('/api', ensureUserRouter);
+
+// SEO helpers: robots, sitemap and simple prerender routes
+app.use(seoRouter);
+
+if (distPath) {
+  app.use(express.static(distPath));
+
+  // SPA fallback: serve index.html for non-API routes.
+  app.get(/^\/(?!api\/).*/, (req, res) => {
+    try {
+      const indexPath = path.join(distPath, 'index.html');
+      const html = fs.readFileSync(indexPath, 'utf8');
+      res.type('html');
+      return res.send(injectPublicConfig(html));
+    } catch (e) {
+      console.error('[static] failed to serve injected index.html', e && e.message ? e.message : e);
+      return res.sendFile(path.join(distPath, 'index.html'));
+    }
+  });
+} else {
+  // If we are NOT serving the SPA, keep the legacy redirect route.
+  // (In production with dist present, /archivos/:slug/:id is handled by the frontend router.)
+  app.use('/', archivosRouter);
+
+  // Dev/diagnostic root response when the frontend build is not present.
+  app.get('/', (req, res) => {
+    res.json({ status: 'ok', message: 'Backend SysteCode' });
+  });
+}
+
+// Normalize body-parser 413 errors to JSON for frontend clients.
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({
+      error: 'Payload Too Large',
+      message: `El contenido enviado excede el limite permitido (${BODY_LIMIT}).`,
+      code: 'PAYLOAD_TOO_LARGE',
+    });
+  }
+  return next(err);
+});
+
+module.exports = app;

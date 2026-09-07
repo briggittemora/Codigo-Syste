@@ -1,0 +1,390 @@
+const express = require('express');
+const multer = require('multer');
+const slugify = require('slugify');
+const { Octokit } = require('@octokit/rest');
+const { supabaseDB, supabaseStorage, SUPABASE_STORAGE_BUCKET } = require('../supabaseClient');
+const { getSupabaseUserFromRequest, getUserRowByEmail } = require('../utils/supabaseAuth');
+const { sanitizeUrl } = require('../utils/security');
+const { buildGitHubPagesFilePath, buildGitHubPagesFileUrl, buildStorageHtmlPath, getGitHubPagesConfig } = require('../utils/githubPages');
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+const router = express.Router();
+
+const normalizeFileLanguage = (value) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'en' || raw === 'english' || raw === 'ingles' || raw === 'inglés') return 'en';
+  return 'es';
+};
+
+const sanitizeStorageObjectName = (value, fallback = 'file') => {
+  const input = String(value || '').trim();
+  const extMatch = input.match(/\.[a-zA-Z0-9]{1,10}$/);
+  const ext = extMatch ? extMatch[0].toLowerCase() : '';
+  const base = input.replace(/\.[^.]+$/, '');
+  const normalized = base
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const safeBase = normalized
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_.]+|[-_.]+$/g, '');
+  const finalBase = safeBase || fallback;
+  return `${finalBase}${ext}`;
+};
+
+const isLikelyVideoPreviewUrl = (value) => {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return false;
+  if (/\.(mp4|webm|ogg|mov|m4v|avi)(\?|$)/.test(text)) return true;
+  if (/drive\.google\.com\//.test(text)) return true;
+  return /(?:youtube\.com|youtu\.be)\//.test(text);
+};
+
+const ghPagesConfig = getGitHubPagesConfig();
+const octokit = ghPagesConfig.token ? new Octokit({ auth: ghPagesConfig.token }) : null;
+
+// Función para generar descripción automática detallada
+const generateAutoDescription = (fileName, category, type = 'free') => {
+  const cleanName = String(fileName || '').trim();
+  const categoryMap = {
+    'amor': 'romántica',
+    'amistad': 'amistad',
+    'romance': 'romántica',
+    'otro': 'HTML',
+  };
+  const categoryLabel = categoryMap[String(category || '').toLowerCase()] || 'HTML';
+  
+  const typeLabel = type === 'vip' ? 'Premium VIP' : 'Gratis';
+  
+  const baseDescription = `Descarga gratis la plantilla HTML "${cleanName}" ahora totalmente disponible en SysteCode. `;
+  
+  const categoryDescription = category && String(category).toLowerCase() !== 'otro' 
+    ? `Archivo ${categoryLabel} completamente editable y personalizable. `
+    : `Archivo HTML de calidad completamente editable y personalizable. `;
+  
+  const featuresDescription = `Código HTML limpio, bien estructurado y fácil de modificar. Plantilla ${typeLabel} lista para usar, dedicar, compartir o completamente personalizable según tus necesidades. `;
+  
+  const benefitsDescription = `Puedes cambiar colores, textos, imágenes y estilos sin necesidad de conocimientos avanzados de programación. Ideal para crear páginas web personalizadas, dedicatorias, invitaciones, cartas digitales, landings o cualquier proyecto creativo. `;
+  
+  const technicalDescription = `Plantilla totalmente responsive, compatible con todos los navegadores modernos (Chrome, Firefox, Safari, Edge). Código optimizado para carga rápida y SEO-friendly. `;
+  
+  const conclusionDescription = `Descarga ${cleanName} ahora mismo y comienza a personalizar tu proyecto. Archivos limpios, modernos y funcionales para tus necesidades de desarrollo web. ¡Únete a miles de usuarios que ya disfrutan de nuestras plantillas en SysteCode!`;
+  
+  return baseDescription + categoryDescription + featuresDescription + benefitsDescription + technicalDescription + conclusionDescription;
+};
+
+// POST /api/upload
+router.post('/upload', upload.fields([
+  { name: 'preview', maxCount: 1 },
+  { name: 'htmlFile', maxCount: 1 },
+  { name: 'thumbnail', maxCount: 1 },
+]), async (req, res) => {
+  try {
+    // Requiere sesión para subir (miembros y admin)
+    const { user } = await getSupabaseUserFromRequest(req);
+    if (!user) {
+      return res.status(401).json({ error: 'No autorizado. Inicia sesión para subir archivos.' });
+    }
+
+    // Consultar rol del usuario en tabla users
+    const email = user.email;
+    const { row: dbUser } = await getUserRowByEmail(email);
+    const rol = String(dbUser?.rol || '').toLowerCase();
+
+    const { name, description, type = 'free', price, category = 'otro', language } = req.body;
+    const previewUrlInput = sanitizeUrl(String(req.body?.preview_url || '').trim());
+    // accept epago either as `epago` or `price` form field
+    const epagoInputRaw = (req.body && (typeof req.body.epago !== 'undefined')) ? req.body.epago : price;
+    const previewFile = req.files && req.files.preview && req.files.preview[0];
+    const htmlFile = req.files && req.files.htmlFile && req.files.htmlFile[0];
+    const thumbnailFile = req.files && req.files.thumbnail && req.files.thumbnail[0];
+
+    if (!name || !htmlFile) return res.status(400).json({ error: 'name and htmlFile are required' });
+
+    const slug = slugify(name, { lower: true, strict: true });
+    const timestamp = Date.now();
+    const id = `${timestamp}`;
+
+    // upload helper - more robust: handle upload errors, get public url from response
+    const uploadToBucket = async (path, buffer, mime) => {
+      if (!supabaseStorage) {
+        console.warn('Supabase storage client not configured, skipping storage upload');
+        return null;
+      }
+
+      try {
+        // try upload (don't upsert by default)
+        let upRes = await supabaseStorage.storage.from(SUPABASE_STORAGE_BUCKET).upload(path, buffer, { contentType: mime, upsert: false });
+        if (upRes.error) {
+          const msg = String(upRes.error.message || upRes.error || '').toLowerCase();
+          if (msg.includes('bucket not found')) {
+            console.warn('Supabase storage bucket not found, skipping storage upload:', SUPABASE_STORAGE_BUCKET);
+            return null;
+          }
+          // if object exists or conflict, try with upsert=true
+          if (msg.includes('already exists') || msg.includes('object already exists') || msg.includes('file exists')) {
+            const retry = await supabaseStorage.storage.from(SUPABASE_STORAGE_BUCKET).upload(path, buffer, { contentType: mime, upsert: true });
+            if (retry.error) throw retry.error;
+            upRes = retry;
+          } else {
+            throw upRes.error;
+          }
+        }
+
+        // get public URL (different SDKs return shape slightly different)
+        try {
+          const pub = supabaseStorage.storage.from(SUPABASE_STORAGE_BUCKET).getPublicUrl(path);
+          // new SDK: { data: { publicUrl } }, older: { publicURL }
+          const publicUrl = (pub && pub.data && (pub.data.publicUrl || pub.data.publicURL)) || pub && (pub.publicURL || pub.publicUrl) || null;
+          if (publicUrl) return publicUrl;
+        } catch (e) {
+          // ignore and fallback
+        }
+
+        // fallback: construct public path if storage URL known
+        const storageBase = process.env.SUPABASE_STORAGE_URL || process.env.SUPABASE_URL || '';
+        if (storageBase) {
+          return `${storageBase.replace(/\/$/, '')}/storage/v1/object/public/${SUPABASE_STORAGE_BUCKET}/${encodeURIComponent(path)}`;
+        }
+
+        return null;
+      } catch (e) {
+        const msg = String(e?.message || e || '').toLowerCase();
+        if (msg.includes('invalid compact jws') || msg.includes('invalid jwt structure') || msg.includes('jwt not in base64url format')) {
+          console.warn('Supabase storage auth invalid, skipping storage upload:', e?.message || e);
+          return null;
+        }
+        console.warn('Supabase storage upload failed, skipping storage upload:', e?.message || e);
+        return null;
+      }
+    };
+
+    let previewImagePublicUrl = null;
+    let previewVideoPublicUrl = null;
+    if (previewFile) {
+      const previewSafeName = sanitizeStorageObjectName(previewFile.originalname, 'preview');
+      const previewPath = `previews/${id}_${previewSafeName}`;
+      try {
+        const uploaded = await uploadToBucket(previewPath, previewFile.buffer, previewFile.mimetype);
+        if (uploaded) {
+          // decide whether it's video or image by mimetype
+          if (String(previewFile.mimetype || '').startsWith('video/')) {
+            previewVideoPublicUrl = uploaded;
+          } else {
+            previewImagePublicUrl = uploaded;
+          }
+        }
+      } catch (e) {
+        console.warn('Supabase preview upload error:', e.message || e);
+      }
+    }
+
+    if (thumbnailFile) {
+      // optional thumbnail upload (not saved in DB separately here)
+      const thumbSafeName = sanitizeStorageObjectName(thumbnailFile.originalname, 'thumb');
+      const thumbPath = `thumbs/${id}_${thumbSafeName}`;
+      try {
+        await uploadToBucket(thumbPath, thumbnailFile.buffer, thumbnailFile.mimetype);
+      } catch (e) {
+        console.warn('Supabase thumbnail upload error:', e.message || e);
+      }
+    }
+
+    // HTML upload
+    const htmlSafeName = sanitizeStorageObjectName(htmlFile.originalname, 'file.html');
+    const htmlPath = buildStorageHtmlPath({ id, originalName: htmlFile.originalname, existingPath: null });
+    let htmlPublicUrl = null;
+    let htmlContent = null;
+    try {
+      htmlContent = htmlFile.buffer.toString('utf8');
+      htmlPublicUrl = await uploadToBucket(htmlPath, htmlFile.buffer, htmlFile.mimetype);
+    } catch (e) {
+      console.warn('Supabase html upload error:', e.message || e);
+      htmlPublicUrl = null;
+    }
+
+    // decide tipo and epago to store
+    const epagoInput = (epagoInputRaw === null || typeof epagoInputRaw === 'undefined') ? null : String(epagoInputRaw).trim();
+    let tipoFinal = (String(type || '').toLowerCase() === 'vip') ? 'vip' : 'free';
+    let epagoToStore = null;
+    let priceUsdToStore = null;
+    if (epagoInput) {
+      const l = epagoInput.toLowerCase();
+      if (l === 'vip') {
+        tipoFinal = 'vip';
+        epagoToStore = 'vip';
+        priceUsdToStore = 2;
+      } else if (l === 'gratuito' || l === 'gratis' || l === 'free') {
+        tipoFinal = 'free';
+        epagoToStore = epagoInput; // keep original text like 'gratuito'
+      } else if (!isNaN(Number(l))) {
+        const n = Number(l);
+        epagoToStore = n;
+        if (n > 0) tipoFinal = 'vip';
+        if (n > 0) priceUsdToStore = n;
+      } else {
+        // unknown string: preserve as-is but don't force vip
+        epagoToStore = epagoInput;
+      }
+    }
+
+    // If VIP but no numeric price parsed, default to $2
+    if (tipoFinal === 'vip' && (!Number.isFinite(Number(priceUsdToStore)) || Number(priceUsdToStore) <= 0)) {
+      priceUsdToStore = 2;
+    }
+
+    const isVipFile = tipoFinal === 'vip';
+    let fileUrl = null;
+    if (!isVipFile && octokit && ghPagesConfig.owner && ghPagesConfig.repo) {
+      try {
+        const filePath = buildGitHubPagesFilePath({
+          id,
+          name,
+          preferredFilename: `${slug}.html`,
+          existingUrl: null,
+          existingPath: null,
+          userId: user?.id || dbUser?.id || null,
+          personalization: false,
+        });
+        const contentBase64 = Buffer.from(htmlContent || htmlFile.buffer.toString('utf8'), 'utf8').toString('base64');
+        const params = {
+          owner: ghPagesConfig.owner,
+          repo: ghPagesConfig.repo,
+          path: filePath,
+          message: `Add file ${filePath}`,
+          content: contentBase64,
+          branch: ghPagesConfig.branch,
+        };
+        try {
+          const existing = await octokit.repos.getContent({ owner: ghPagesConfig.owner, repo: ghPagesConfig.repo, path: filePath, ref: ghPagesConfig.branch });
+          if (existing && existing.data && existing.data.sha) params.sha = existing.data.sha;
+        } catch (e) {}
+        await octokit.repos.createOrUpdateFileContents(params);
+        fileUrl = buildGitHubPagesFileUrl({
+          owner: ghPagesConfig.owner,
+          repo: ghPagesConfig.repo,
+          baseUrl: ghPagesConfig.baseUrl,
+          path: filePath,
+        });
+      } catch (e) {
+        console.warn('GitHub Pages publish error:', e.message || e);
+      }
+    }
+
+    // If user provided a preview URL, detect whether it is video-like.
+    // This allows free files to use a video preview URL too.
+    if (previewUrlInput) {
+      if (isLikelyVideoPreviewUrl(previewUrlInput)) {
+        previewVideoPublicUrl = previewUrlInput;
+      } else {
+        previewImagePublicUrl = previewUrlInput;
+      }
+    }
+
+    // Reglas de subida:
+    // - rol=admin puede subir vip y free
+    // - rol=miembro (o vacío) solo puede subir free
+    if (tipoFinal === 'vip' && rol !== 'admin') {
+      return res.status(403).json({ error: 'Solo un admin puede subir archivos VIP.' });
+    }
+
+    const fileLanguage = normalizeFileLanguage(language);
+
+    // insert metadata - use DB column names (spanish) and fall back gracefully when the table is missing newer columns
+    let dbRecord = null;
+    // Detect once per-request whether the html_files table contains uploader columns
+    let _htmlFilesHasUploaderCols = true;
+    try {
+      const probe = await supabaseDB.from('html_files').select('uploader_email').limit(1);
+      if (probe && probe.error) _htmlFilesHasUploaderCols = false;
+    } catch (e) {
+      _htmlFilesHasUploaderCols = false;
+    }
+    try {
+      const insertPayload = {
+        filename: name,
+        file_data: htmlPublicUrl ? htmlPath : null,
+        categoria: category,
+        tipo: tipoFinal,
+        epago: epagoToStore,
+        descripcion: description || generateAutoDescription(name, category, tipoFinal),
+        preview_image_url: previewImagePublicUrl,
+        preview_video_url: previewVideoPublicUrl,
+        supabase_url: isVipFile ? null : htmlPublicUrl,
+        file_url: isVipFile ? null : fileUrl,
+        supabase_user_id: user?.id || null,
+        // Guardar email/nombre del uploader para resolvers que busquen por email
+        // Preferir el email de la fila `users` (dbUser) o el `user` autenticado
+        // only include uploader columns if the table supports them
+        ...( _htmlFilesHasUploaderCols ? {
+          uploader_email: (dbUser && dbUser.email) || user?.email || email || null,
+          uploader_name: (user && (user.user_metadata?.full_name || user.user_metadata?.name)) || (dbUser && dbUser.email) || user?.email || null,
+        } : {}),
+      };
+
+      // Preferir guardar el UUID de Auth (`user.id`) en `user_id` si está disponible
+      if (user?.id) {
+        insertPayload.user_id = user.id;
+      } else if (dbUser?.id && /^\d+$/.test(String(dbUser.id))) {
+        // Legacy: si la fila users.id es numérica, conservar comportamiento previo
+        insertPayload.user_id = dbUser.id;
+      }
+
+      if (tipoFinal === 'vip') {
+        insertPayload.price_usd = Number(priceUsdToStore);
+      }
+      insertPayload.language = fileLanguage;
+
+      let { data: insertData, error: insertError } = await supabaseDB.from('html_files').insert([insertPayload]).select();
+      if (insertError) {
+        const msg = String(insertError.message || insertError || '');
+        const retryPayload = { ...insertPayload };
+
+        const lower = msg.toLowerCase();
+        if (lower.includes('price_usd') && lower.includes('does not exist')) delete retryPayload.price_usd;
+        if (lower.includes('language') && lower.includes('does not exist')) delete retryPayload.language;
+        if (lower.includes('supabase_user_id') && (lower.includes('does not exist') || lower.includes('could not find') || lower.includes('schema cache'))) delete retryPayload.supabase_user_id;
+        // handle older schemas that don't have uploader_email/uploader_name
+        if (lower.includes('uploader_email') && (lower.includes('does not exist') || lower.includes('could not find') || lower.includes('schema cache'))) delete retryPayload.uploader_email;
+        if (lower.includes('uploader_name') && (lower.includes('does not exist') || lower.includes('could not find') || lower.includes('schema cache'))) delete retryPayload.uploader_name;
+
+        if (Object.keys(retryPayload).length !== Object.keys(insertPayload).length) {
+          const retry = await supabaseDB.from('html_files').insert([retryPayload]).select();
+          insertData = retry.data;
+          insertError = retry.error;
+        }
+      }
+      if (insertError) {
+        console.warn('Supabase insert error:', insertError.message || insertError);
+        return res.status(500).json({ error: (insertError && insertError.message) || String(insertError) });
+      }
+      dbRecord = insertData && insertData[0];
+    } catch (e) {
+      console.warn('DB insert exception:', e.message || e);
+      return res.status(500).json({ error: (e && e.message) || String(e) });
+    }
+
+    const previewPublicUrl = previewVideoPublicUrl || previewImagePublicUrl || null;
+    return res.json({
+      success: true,
+      data: {
+        id: dbRecord?.id,
+        name,
+        slug,
+        category,
+        type: tipoFinal,
+        language: dbRecord?.language || fileLanguage,
+        price: (tipoFinal === 'vip') ? Number(priceUsdToStore) : null,
+        preview: previewPublicUrl,
+        html: htmlPublicUrl,
+        file: fileUrl,
+        db: dbRecord,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+module.exports = router;
