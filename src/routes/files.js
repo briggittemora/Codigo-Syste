@@ -930,6 +930,7 @@ router.post(
       const previewImageFile = req.files && req.files.previewImage && req.files.previewImage[0];
       const previewVideoFile = req.files && req.files.previewVideo && req.files.previewVideo[0];
       const htmlFile = req.files && req.files.htmlFile && req.files.htmlFile[0];
+      const isPersonalization = String(req.body?.personalization || '').toLowerCase() === 'true';
 
       if (!previewImageFile && !previewVideoFile && !htmlFile) {
         return res.status(400).json({ error: 'No files provided' });
@@ -1020,7 +1021,7 @@ router.post(
           originalName: htmlFile.originalname,
           existingPath,
           userId: personalizationUserId,
-          personalization: true,
+          personalization: isPersonalization,
         });
         const publicUrl = await uploadToBucket(path, htmlFile.buffer, htmlFile.mimetype);
         let githubPage = null;
@@ -1029,8 +1030,8 @@ router.post(
             existingUrl: rec.file_url || rec.html_url || rec.supabase_url || null,
             existingPath: rec.file_data || null,
             userId: personalizationUserId,
-            personalization: true,
-            timestamp: String(Date.now()),
+            personalization: isPersonalization,
+            timestamp: isPersonalization ? String(Date.now()) : null,
           });
         } catch (e) {
           console.warn('GitHub publish after edit failed:', e?.message || e);
@@ -1040,6 +1041,21 @@ router.post(
             detail: e?.message || 'Error de GitHub Pages',
             code: githubStatus === 401 || githubStatus === 403 ? 'GITHUB_AUTH_ERROR' : 'GITHUB_PUBLISH_ERROR',
           });
+        }
+
+        if (!isPersonalization) {
+          const { error: fileUpdateError } = await supabaseDB
+            .from('html_files')
+            .update({
+              file_url: githubPage.url,
+              supabase_url: publicUrl || rec.supabase_url || null,
+              file_data: publicUrl ? path : existingPath,
+            })
+            .eq('id', rec.id);
+          if (fileUpdateError) {
+            console.error('[assets] failed to update edited file URLs:', fileUpdateError.message || fileUpdateError);
+            return res.status(500).json({ error: 'El archivo se publicó, pero no se pudieron actualizar sus URLs.' });
+          }
         }
 
         try {
