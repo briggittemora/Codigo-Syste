@@ -48,6 +48,16 @@ const generateAutoDescription = (fileName, category, type = 'free') => {
   return baseDescription + categoryDescription + featuresDescription + benefitsDescription + technicalDescription + conclusionDescription;
 };
 
+const getManualDescription = (record) => {
+  const description = normalizeText(record?.descripcion || record?.description);
+  if (!description) return null;
+
+  const fileName = record?.name || record?.filename || record?.file_data || '';
+  const category = record?.categoria || record?.category || '';
+  const type = record?.tipo || record?.type || 'free';
+  return description === generateAutoDescription(fileName, category, type).trim() ? null : description;
+};
+
 const { Readable, pipeline } = require('stream');
 const { promisify } = require('util');
 const pipelineAsync = promisify(pipeline);
@@ -666,7 +676,7 @@ router.get('/files', async (req, res) => {
         language: mappedLanguage,
         category: rec.categoria || rec.category || null,
         price,
-        description: rec.descripcion || rec.description || null,
+        description: getManualDescription(rec),
         preview_url,
         preview_image_url,
         preview_video_url,
@@ -740,7 +750,7 @@ router.get('/file/:id', async (req, res) => {
       language: mappedLanguage,
       category: rec.categoria || rec.category || null,
       price,
-      description: rec.descripcion || rec.description || null,
+      description: getManualDescription(rec),
       preview_url,
       preview_image_url,
       preview_video_url,
@@ -801,13 +811,10 @@ router.put('/file/:id', async (req, res) => {
 
     if (typeof name !== 'undefined') allowed.filename = name;
     
-    // Handle description: if provided, use it; if empty string, auto-generate; if undefined, keep existing
+    // Preserve an empty description as empty so the frontend can hide it.
     if (typeof description !== 'undefined') {
       const descValue = description ? String(description).trim() : '';
-      const finalName = typeof name !== 'undefined' ? String(name).trim() : String(rec.filename || '').trim();
-      const finalCategory = typeof category !== 'undefined' ? String(category).trim() : String(rec.categoria || '').trim();
-      const finalType = typeof tipo !== 'undefined' ? String(tipo).toLowerCase() : String(rec.tipo || '').toLowerCase();
-      allowed.descripcion = descValue || generateAutoDescription(finalName, finalCategory, finalType);
+      allowed.descripcion = descValue || null;
     }
     
     if (typeof category !== 'undefined') allowed.categoria = category;

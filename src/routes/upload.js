@@ -307,7 +307,7 @@ router.post('/upload', upload.fields([
         categoria: category,
         tipo: tipoFinal,
         epago: epagoToStore,
-        descripcion: description || generateAutoDescription(name, category, tipoFinal),
+        descripcion: typeof description === 'string' ? description.trim() || null : null,
         preview_image_url: previewImagePublicUrl,
         preview_video_url: previewVideoPublicUrl,
         supabase_url: isVipFile ? null : htmlPublicUrl,
