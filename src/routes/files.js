@@ -249,6 +249,11 @@ const publishHtmlToGithubPages = async (rec, html, preferredFilename = null, opt
   try {
     await octokit.rest.git.getRef({ owner: cfg.owner, repo: cfg.repo, ref: `heads/${cfg.branch}` });
   } catch (e) {
+    if (e?.status && e.status !== 404) {
+      const githubError = new Error(`GitHub no autorizó la publicación (${e.status}: ${e.message || 'error de autenticación'})`);
+      githubError.status = e.status;
+      throw githubError;
+    }
     const repoInfo = await octokit.rest.repos.get({ owner: cfg.owner, repo: cfg.repo });
     const defaultBranch = repoInfo.data.default_branch;
     const commit = await octokit.rest.repos.getCommit({ owner: cfg.owner, repo: cfg.repo, ref: defaultBranch });
@@ -1029,7 +1034,12 @@ router.post(
           });
         } catch (e) {
           console.warn('GitHub publish after edit failed:', e?.message || e);
-          return res.status(500).json({ error: 'No se pudo publicar en GitHub Pages al editar el HTML' });
+          const githubStatus = Number(e?.status) || 500;
+          return res.status(500).json({
+            error: 'No se pudo publicar en GitHub Pages al editar el HTML',
+            detail: e?.message || 'Error de GitHub Pages',
+            code: githubStatus === 401 || githubStatus === 403 ? 'GITHUB_AUTH_ERROR' : 'GITHUB_PUBLISH_ERROR',
+          });
         }
 
         try {

@@ -85,15 +85,21 @@ const limiter = rateLimit({
 const getPublicSupabaseConfig = () => {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.SUPABASE_DB_URL || process.env.VITE_SUPABASE_URL || '';
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLIC_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+  const paypalClientId = process.env.PAYPAL_CLIENT_ID || process.env.VITE_PAYPAL_CLIENT_ID || '';
   return {
     supabaseUrl: String(supabaseUrl || '').trim() || null,
     supabaseAnonKey: String(supabaseAnonKey || '').trim() || null,
+    paypalClientId: String(paypalClientId || '').trim() || null,
   };
 };
 
 const injectPublicConfig = (html) => {
   const config = getPublicSupabaseConfig();
-  const payload = JSON.stringify({ supabaseUrl: config.supabaseUrl, supabaseAnonKey: config.supabaseAnonKey });
+  const payload = JSON.stringify({
+    supabaseUrl: config.supabaseUrl,
+    supabaseAnonKey: config.supabaseAnonKey,
+    paypalClientId: config.paypalClientId,
+  });
   const script = `<script>window.__APP_PUBLIC_CONFIG__=${payload};</script>`;
   if (html.includes('</head>')) {
     return html.replace('</head>', `${script}</head>`);
