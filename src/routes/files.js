@@ -58,6 +58,17 @@ const getManualDescription = (record) => {
   return description === generateAutoDescription(fileName, category, type).trim() ? null : description;
 };
 
+const getSeoDescription = (record) => {
+  const manualDescription = getManualDescription(record);
+  if (manualDescription) return manualDescription;
+
+  return generateAutoDescription(
+    record?.name || record?.filename || record?.file_data || '',
+    record?.categoria || record?.category || '',
+    record?.tipo || record?.type || 'free',
+  ).trim();
+};
+
 const { Readable, pipeline } = require('stream');
 const { promisify } = require('util');
 const pipelineAsync = promisify(pipeline);
@@ -677,6 +688,7 @@ router.get('/files', async (req, res) => {
         category: rec.categoria || rec.category || null,
         price,
         description: getManualDescription(rec),
+        seoDescription: getSeoDescription(rec),
         preview_url,
         preview_image_url,
         preview_video_url,
@@ -751,6 +763,7 @@ router.get('/file/:id', async (req, res) => {
       category: rec.categoria || rec.category || null,
       price,
       description: getManualDescription(rec),
+      seoDescription: getSeoDescription(rec),
       preview_url,
       preview_image_url,
       preview_video_url,
@@ -811,10 +824,13 @@ router.put('/file/:id', async (req, res) => {
 
     if (typeof name !== 'undefined') allowed.filename = name;
     
-    // Preserve an empty description as empty so the frontend can hide it.
+    // Empty descriptions keep an automatic SEO description, but it is not shown as manual text.
     if (typeof description !== 'undefined') {
       const descValue = description ? String(description).trim() : '';
-      allowed.descripcion = descValue || null;
+      const finalName = typeof name !== 'undefined' ? String(name).trim() : String(rec.filename || '').trim();
+      const finalCategory = typeof category !== 'undefined' ? String(category).trim() : String(rec.categoria || '').trim();
+      const finalType = typeof tipo !== 'undefined' ? String(tipo).toLowerCase() : String(rec.tipo || '').toLowerCase();
+      allowed.descripcion = descValue || generateAutoDescription(finalName, finalCategory, finalType);
     }
     
     if (typeof category !== 'undefined') allowed.categoria = category;
