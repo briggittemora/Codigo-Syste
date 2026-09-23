@@ -4,10 +4,19 @@ CREATE TABLE IF NOT EXISTS public.lemonsqueezy_orders (
   event_name text,
   email text,
   variant_id text,
+  file_id text,
+  custom_id text,
   status text,
   raw jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.lemonsqueezy_orders
+  ADD COLUMN IF NOT EXISTS file_id text,
+  ADD COLUMN IF NOT EXISTS custom_id text;
+
 CREATE INDEX IF NOT EXISTS idx_lemonsqueezy_orders_email
   ON public.lemonsqueezy_orders(email);
+
+CREATE INDEX IF NOT EXISTS idx_lemonsqueezy_orders_file
+  ON public.lemonsqueezy_orders(file_id, custom_id, status);

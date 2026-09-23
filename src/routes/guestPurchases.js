@@ -47,7 +47,22 @@ router.get('/guest/purchases/access/:fileId', async (req, res) => {
     }
 
     const ok = Array.isArray(rows) && rows.length > 0 && String(rows[0].status || '').toUpperCase() === 'COMPLETED';
-    return res.json({ ok: true, data: { canAccess: !!ok, reason: ok ? 'guest-purchase' : 'none' } });
+    if (ok) return res.json({ ok: true, data: { canAccess: true, reason: 'guest-purchase' } });
+
+    const { data: lemonRows, error: lemonError } = await supabaseDB
+      .from('lemonsqueezy_orders')
+      .select('order_id,status,email,custom_id')
+      .eq('email', guestEmail)
+      .eq('custom_id', customId)
+      .eq('status', 'paid')
+      .limit(1);
+    if (lemonError) {
+      console.warn('guest lemonsqueezy_orders lookup error:', lemonError.message || lemonError);
+      return res.status(500).json({ error: 'No se pudo verificar la compra' });
+    }
+
+    const lemonOk = Array.isArray(lemonRows) && lemonRows.length > 0;
+    return res.json({ ok: true, data: { canAccess: lemonOk, reason: lemonOk ? 'guest-purchase' : 'none' } });
   } catch (e) {
     console.error('GET /api/guest/purchases/access error:', e);
     return res.status(500).json({ error: 'Internal server error' });
