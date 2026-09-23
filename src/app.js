@@ -20,12 +20,19 @@ const configRouter = require('./routes/config');
 const ensureUserRouter = require('./routes/ensureUser');
 
 const app = express();
+const lemonSqueezyRouter = require('./routes/lemonsqueezy');
+
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
 const BODY_LIMIT = process.env.BODY_LIMIT || '10mb';
 
-app.use(express.json({ limit: BODY_LIMIT }));
+app.use(express.json({
+  limit: BODY_LIMIT,
+  verify: (req, res, buffer) => {
+    req.rawBody = Buffer.from(buffer);
+  },
+}));
 app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT, parameterLimit: 1000 }));
 
 app.use((req, res, next) => {
@@ -151,6 +158,7 @@ app.use('/api', meRouter);
 app.use('/api', purchasesRouter);
 app.use('/api', guestPurchasesRouter);
 app.use('/api', paypalRouter);
+app.use('/api', lemonSqueezyRouter);
 app.use('/api/profile', profileRouter);
 app.use('/api', configRouter);
 app.use('/api', ensureUserRouter);
