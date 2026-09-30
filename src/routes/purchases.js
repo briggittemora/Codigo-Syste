@@ -79,7 +79,22 @@ router.get('/purchases/access/:fileId', async (req, res) => {
     }
 
     const lemonOk = Array.isArray(lemonRows) && lemonRows.length > 0;
-    return res.json({ ok: true, data: { canAccess: lemonOk, reason: lemonOk ? 'purchase' : 'none' } });
+    if (lemonOk) return res.json({ ok: true, data: { canAccess: true, reason: 'purchase' } });
+
+    const { data: coffeeRows, error: coffeeError } = await supabaseDB
+      .from('buymeacoffee_orders')
+      .select('transaction_id')
+      .eq('email', email.toLowerCase())
+      .eq('file_id', String(fileId))
+      .eq('status', 'paid')
+      .limit(1);
+    if (coffeeError) {
+      console.warn('buymeacoffee_orders lookup error:', coffeeError.message || coffeeError);
+      return res.status(500).json({ error: 'No se pudo verificar la compra' });
+    }
+
+    const coffeeOk = Array.isArray(coffeeRows) && coffeeRows.length > 0;
+    return res.json({ ok: true, data: { canAccess: coffeeOk, reason: coffeeOk ? 'purchase' : 'none' } });
   } catch (e) {
     console.error('GET /api/purchases/access error:', e);
     return res.status(500).json({ error: 'Internal server error' });

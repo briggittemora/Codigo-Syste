@@ -18,6 +18,7 @@ const paypalRouter = require('./routes/paypal');
 const profileRouter = require('./routes/profile');
 const configRouter = require('./routes/config');
 const ensureUserRouter = require('./routes/ensureUser');
+const buyMeACoffeeRouter = require('./routes/buymeacoffee');
 
 const app = express();
 const lemonSqueezyRouter = require('./routes/lemonsqueezy');
@@ -159,6 +160,7 @@ app.use('/api', purchasesRouter);
 app.use('/api', guestPurchasesRouter);
 app.use('/api', paypalRouter);
 app.use('/api', lemonSqueezyRouter);
+app.use('/api', buyMeACoffeeRouter);
 app.use('/api/profile', profileRouter);
 app.use('/api', configRouter);
 app.use('/api', ensureUserRouter);
