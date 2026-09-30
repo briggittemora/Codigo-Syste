@@ -11,15 +11,17 @@ router.get('/me', async (req, res) => {
     const email = user.email || null;
     let role = null;
     let modalidad = null;
+    let registeredInDb = null;
     if (email) {
       const { row, error: rowErr } = await getUserRowByEmail(email);
+      registeredInDb = rowErr ? null : !!row;
       if (!rowErr && row) {
         role = (row.rol || row.role || null);
         modalidad = (row.modalidad || row.membership || null);
       }
     }
 
-    return res.json({ ok: true, data: { email: user.email, id: user.id, role, modalidad } });
+    return res.json({ ok: true, data: { email: user.email, id: user.id, role, modalidad, registeredInDb } });
   } catch (e) {
     console.error('GET /api/me error:', e?.message || e);
     return res.status(500).json({ error: 'Internal server error' });
