@@ -1404,7 +1404,21 @@ router.get('/file/:id/download', async (req, res) => {
             console.warn('paypal_orders purchase check error:', perr.message || perr);
             return res.status(500).json({ error: 'No se pudo verificar el acceso VIP' });
           }
-          const hasPurchase = Array.isArray(prow) && prow.length > 0 && String(prow[0].status || '').toUpperCase() === 'COMPLETED';
+          let hasPurchase = Array.isArray(prow) && prow.length > 0 && String(prow[0].status || '').toUpperCase() === 'COMPLETED';
+          if (!hasPurchase) {
+            const { data: coffeeOrders, error: coffeeError } = await supabaseDB
+              .from('buymeacoffee_orders')
+              .select('transaction_id,status')
+              .eq('email', email.toLowerCase())
+              .eq('file_id', String(rec.id || id))
+              .eq('status', 'paid')
+              .limit(1);
+            if (coffeeError) {
+              console.warn('buymeacoffee_orders download check error:', coffeeError.message || coffeeError);
+              return res.status(500).json({ error: 'No se pudo verificar el acceso Buy Me a Coffee' });
+            }
+            hasPurchase = Array.isArray(coffeeOrders) && coffeeOrders.length > 0;
+          }
           if (!hasPurchase) {
             return res.status(403).json({ error: 'Acceso VIP requerido. Compra el archivo o adquiere la membresía.' });
           }
