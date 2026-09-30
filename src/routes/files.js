@@ -1439,12 +1439,9 @@ router.get('/file/:id/download', async (req, res) => {
       .map((value) => sanitizeUrl(String(value)))
       .filter(Boolean);
     const fileDataPath = String(rec.file_data || '').trim();
-    const isVipItem = isVipFileRecord(rec);
 
     let url = null;
-    if (isVipItem && fileDataPath) {
-      url = fileDataPath;
-    } else if (safeAbsoluteUrls.length > 0) {
+    if (safeAbsoluteUrls.length > 0) {
       url = safeAbsoluteUrls[0];
     } else if (fileDataPath) {
       url = fileDataPath;
