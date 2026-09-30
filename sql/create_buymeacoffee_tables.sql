@@ -21,3 +21,25 @@ CREATE TABLE IF NOT EXISTS public.buymeacoffee_orders (
 
 CREATE INDEX IF NOT EXISTS idx_buymeacoffee_orders_access
   ON public.buymeacoffee_orders(email, file_id, status);
+
+CREATE TABLE IF NOT EXISTS public.buymeacoffee_membership_products (
+  extra_id text PRIMARY KEY,
+  membership_type text NOT NULL UNIQUE DEFAULT 'vip',
+  checkout_url text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.buymeacoffee_membership_orders (
+  transaction_id text NOT NULL,
+  extra_id text NOT NULL,
+  email text,
+  status text NOT NULL,
+  amount numeric,
+  currency text,
+  raw jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (transaction_id, extra_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_buymeacoffee_membership_orders_access
+  ON public.buymeacoffee_membership_orders(email, status);
