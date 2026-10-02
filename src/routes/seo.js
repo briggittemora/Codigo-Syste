@@ -6,7 +6,7 @@ const { updateSeoMetadata } = require('../utils/seoHtml');
 
 const router = express.Router();
 const SEO_CATEGORY_ROUTES = [
-  { slug: 'gratis', title: 'Plantillas HTML Gratis', description: 'Explora plantillas HTML gratis listas para usar, editar y personalizar.', priority: '0.8' },
+  { slug: 'gratis', title: 'Plantillas HTML Gratis para Descargar', description: 'Descarga plantillas HTML gratis para personalizar: páginas románticas, cartas de amor y dedicatorias. Revisa la vista previa y elige un diseño.', priority: '0.8' },
   { slug: 'vip', title: 'Plantillas HTML VIP', description: 'Descubre plantillas HTML VIP con diseño premium y mayor detalle visual.', priority: '0.8' },
   { slug: 'amor', title: 'Plantillas Románticas HTML', description: 'Encuentra plantillas románticas HTML para dedicar, sorprender o compartir.', priority: '0.8' },
   { slug: 'amistad', title: 'Plantillas HTML de Amistad', description: 'Plantillas HTML pensadas para amistad, dedicatorias y regalos digitales.', priority: '0.7' },
@@ -136,7 +136,7 @@ router.get('/categorias/:category', async (req, res, next) => {
       const candidateIndexPaths = [
         path.resolve(__dirname, '..', 'dist', 'index.html'),
         path.resolve(__dirname, '..', '..', 'dist', 'index.html'),
-        path.resolve(__dirname, '..', '..', 'frontend', 'dist', 'index.html'),
+        path.resolve(__dirname, '..', '..', '..', 'frontend', 'dist', 'index.html'),
       ];
       let found = null;
       for (const p of candidateIndexPaths) {
@@ -181,7 +181,7 @@ router.get('/archivos/:slug/:id', async (req, res, next) => {
     const candidateIndexPaths = [
       path.resolve(__dirname, '..', 'dist', 'index.html'), // backend/dist
       path.resolve(__dirname, '..', '..', 'dist', 'index.html'), // root dist
-      path.resolve(__dirname, '..', '..', 'frontend', 'dist', 'index.html'), // frontend/dist
+      path.resolve(__dirname, '..', '..', '..', 'frontend', 'dist', 'index.html'), // frontend/dist
     ];
 
     let html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:image" content="${escapeHtml(image)}"><link rel="canonical" href="${escapeHtml(canonicalUrl)}"></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(description)}</p></body></html>`;
