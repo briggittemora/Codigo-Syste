@@ -5,7 +5,7 @@ const { Octokit } = require('@octokit/rest');
 const { supabaseDB, supabaseStorage, SUPABASE_STORAGE_BUCKET } = require('../supabaseClient');
 const { getSupabaseUserFromRequest, getUserRowByEmail } = require('../utils/supabaseAuth');
 const { sanitizeUrl } = require('../utils/security');
-const { buildGitHubPagesFilePath, buildGitHubPagesFileUrl, buildStorageHtmlPath, getGitHubPagesConfig } = require('../utils/githubPages');
+const { buildGitHubPagesFilePath, buildGitHubPagesFileUrl, getGitHubPagesConfig } = require('../utils/githubPages');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 const router = express.Router();
@@ -190,18 +190,7 @@ router.post('/upload', upload.fields([
       }
     }
 
-    // HTML upload
-    const htmlSafeName = sanitizeStorageObjectName(htmlFile.originalname, 'file.html');
-    const htmlPath = buildStorageHtmlPath({ id, originalName: htmlFile.originalname, existingPath: null });
-    let htmlPublicUrl = null;
-    let htmlContent = null;
-    try {
-      htmlContent = htmlFile.buffer.toString('utf8');
-      htmlPublicUrl = await uploadToBucket(htmlPath, htmlFile.buffer, htmlFile.mimetype);
-    } catch (e) {
-      console.warn('Supabase html upload error:', e.message || e);
-      htmlPublicUrl = null;
-    }
+    const htmlContent = htmlFile.buffer.toString('utf8');
 
     // decide tipo and epago to store
     const epagoInput = (epagoInputRaw === null || typeof epagoInputRaw === 'undefined') ? null : String(epagoInputRaw).trim();
@@ -234,41 +223,54 @@ router.post('/upload', upload.fields([
     }
 
     const isVipFile = tipoFinal === 'vip';
+    if (isVipFile && rol !== 'admin') {
+      return res.status(403).json({ error: 'Solo un admin puede subir archivos VIP.' });
+    }
+
     let fileUrl = null;
-    if (!isVipFile && octokit && ghPagesConfig.owner && ghPagesConfig.repo) {
+    let githubPath = null;
+    if (!octokit || !ghPagesConfig.owner || !ghPagesConfig.repo) {
+      return res.status(500).json({ error: 'GitHub Pages no está configurado para publicar archivos.' });
+    }
+    try {
+      githubPath = buildGitHubPagesFilePath({
+        id,
+        name,
+        preferredFilename: `${slug}.html`,
+        existingUrl: null,
+        existingPath: null,
+        userId: user?.id || dbUser?.id || null,
+        personalization: false,
+      });
+      const contentBase64 = Buffer.from(htmlContent, 'utf8').toString('base64');
+      const params = {
+        owner: ghPagesConfig.owner,
+        repo: ghPagesConfig.repo,
+        path: githubPath,
+        message: `Add file ${githubPath}`,
+        content: contentBase64,
+        branch: ghPagesConfig.branch,
+      };
       try {
-        const filePath = buildGitHubPagesFilePath({
-          id,
-          name,
-          preferredFilename: `${slug}.html`,
-          existingUrl: null,
-          existingPath: null,
-          userId: user?.id || dbUser?.id || null,
-          personalization: false,
-        });
-        const contentBase64 = Buffer.from(htmlContent || htmlFile.buffer.toString('utf8'), 'utf8').toString('base64');
-        const params = {
-          owner: ghPagesConfig.owner,
-          repo: ghPagesConfig.repo,
-          path: filePath,
-          message: `Add file ${filePath}`,
-          content: contentBase64,
-          branch: ghPagesConfig.branch,
-        };
-        try {
-          const existing = await octokit.repos.getContent({ owner: ghPagesConfig.owner, repo: ghPagesConfig.repo, path: filePath, ref: ghPagesConfig.branch });
-          if (existing && existing.data && existing.data.sha) params.sha = existing.data.sha;
-        } catch (e) {}
-        await octokit.repos.createOrUpdateFileContents(params);
-        fileUrl = buildGitHubPagesFileUrl({
-          owner: ghPagesConfig.owner,
-          repo: ghPagesConfig.repo,
-          baseUrl: ghPagesConfig.baseUrl,
-          path: filePath,
-        });
+        const existing = await octokit.repos.getContent({ owner: ghPagesConfig.owner, repo: ghPagesConfig.repo, path: githubPath, ref: ghPagesConfig.branch });
+        if (existing && existing.data && existing.data.sha) params.sha = existing.data.sha;
       } catch (e) {
-        console.warn('GitHub Pages publish error:', e.message || e);
+        if (e?.status !== 404) throw e;
       }
+      await octokit.repos.createOrUpdateFileContents(params);
+      fileUrl = buildGitHubPagesFileUrl({
+        owner: ghPagesConfig.owner,
+        repo: ghPagesConfig.repo,
+        baseUrl: ghPagesConfig.baseUrl,
+        path: githubPath,
+      });
+      if (!fileUrl) throw new Error('No se pudo generar la URL pública de GitHub Pages.');
+    } catch (e) {
+      console.error('GitHub Pages publish error:', e.message || e);
+      return res.status(502).json({
+        error: 'No se pudo publicar el archivo en GitHub Pages.',
+        detail: e.message || String(e),
+      });
     }
 
     // If user provided a preview URL, detect whether it is video-like.
@@ -279,13 +281,6 @@ router.post('/upload', upload.fields([
       } else {
         previewImagePublicUrl = previewUrlInput;
       }
-    }
-
-    // Reglas de subida:
-    // - rol=admin puede subir vip y free
-    // - rol=miembro (o vacío) solo puede subir free
-    if (tipoFinal === 'vip' && rol !== 'admin') {
-      return res.status(403).json({ error: 'Solo un admin puede subir archivos VIP.' });
     }
 
     const fileLanguage = normalizeFileLanguage(language);
@@ -303,7 +298,7 @@ router.post('/upload', upload.fields([
     try {
       const insertPayload = {
         filename: name,
-        file_data: htmlPublicUrl ? htmlPath : null,
+        file_data: githubPath,
         categoria: category,
         tipo: tipoFinal,
         epago: epagoToStore,
@@ -312,8 +307,8 @@ router.post('/upload', upload.fields([
           : generateAutoDescription(name, category, tipoFinal),
         preview_image_url: previewImagePublicUrl,
         preview_video_url: previewVideoPublicUrl,
-        supabase_url: isVipFile ? null : htmlPublicUrl,
-        file_url: isVipFile ? null : fileUrl,
+        supabase_url: null,
+        file_url: fileUrl,
         supabase_user_id: user?.id || null,
         // Guardar email/nombre del uploader para resolvers que busquen por email
         // Preferir el email de la fila `users` (dbUser) o el `user` autenticado
@@ -378,7 +373,7 @@ router.post('/upload', upload.fields([
         language: dbRecord?.language || fileLanguage,
         price: (tipoFinal === 'vip') ? Number(priceUsdToStore) : null,
         preview: previewPublicUrl,
-        html: htmlPublicUrl,
+        html: fileUrl,
         file: fileUrl,
         db: dbRecord,
       },
