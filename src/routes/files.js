@@ -1433,7 +1433,7 @@ router.get('/file/:id/download', async (req, res) => {
       console.warn('Failed to update downloads count:', e && e.message ? e.message : e);
     }
 
-    const githubPagesUrl = getGitHubPagesFileUrlForRecord(rec);
+    const githubPagesUrl = isVipFileRecord(rec) ? null : getGitHubPagesFileUrlForRecord(rec);
     const safeAbsoluteUrls = [githubPagesUrl, rec.html_url, rec.file_url, rec.supabase_url]
       .filter(Boolean)
       .map((value) => sanitizeUrl(String(value)))
