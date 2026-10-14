@@ -4,7 +4,7 @@ const { supabaseDB, supabaseStorage, SUPABASE_STORAGE_BUCKET } = require('../sup
 const { getSupabaseUserFromRequest, getUserRowByEmail } = require('../utils/supabaseAuth');
 const { sanitizeHtmlContent, sanitizeUrl } = require('../utils/security');
 const { withSupabaseRetry } = require('../utils/supabaseRetry');
-const { buildGitHubPagesFilePath, buildGitHubPagesFileUrl, buildStorageHtmlPath, getGitHubPagesFileUrlForRecord } = require('../utils/githubPages');
+const { buildGitHubPagesFilePath, buildGitHubPagesFileUrl, buildStorageHtmlPath, getGitHubPagesFileUrlForRecord, getGitHubPagesConfig, extractGitHubPagesRelativePath } = require('../utils/githubPages');
 const cloudinary = require('cloudinary').v2;
 const { Octokit } = require('@octokit/rest');
 
@@ -1659,6 +1659,24 @@ router.get('/file/:id/download', async (req, res) => {
       try {
         return await streamUrlAsAttachment(url, { suppressHttpErrors: true });
       } catch (primaryErr) {
+        const githubConfig = getGitHubPagesConfig();
+        const githubPath = fileDataPath && !/^https?:\/\//i.test(fileDataPath)
+          ? fileDataPath.replace(/^\/+/, '')
+          : extractGitHubPagesRelativePath(url);
+        const rawBranches = [...new Set([githubConfig.branch, 'main', 'gh-pages'].filter(Boolean))];
+        if (githubConfig.owner && githubConfig.repo && githubPath) {
+          for (const branch of rawBranches) {
+            const rawPath = githubPath.split('/').map(encodeURIComponent).join('/');
+            const rawUrl = `https://raw.githubusercontent.com/${encodeURIComponent(githubConfig.owner)}/${encodeURIComponent(githubConfig.repo)}/${encodeURIComponent(branch)}/${rawPath}`;
+            console.warn('Primary HTML download source failed, trying GitHub raw fallback:', rawUrl);
+            try {
+              return await streamUrlAsAttachment(rawUrl, { suppressHttpErrors: true });
+            } catch (rawErr) {
+              console.warn(`GitHub raw download fallback failed for branch ${branch}:`, rawErr?.message || rawErr);
+            }
+          }
+        }
+
         const fallbackUrl = rec.supabase_url && rec.supabase_url !== url ? rec.supabase_url : null;
         if (fallbackUrl) {
           console.warn('Primary HTML download source failed, trying supabase_url fallback:', primaryErr?.message || primaryErr);
